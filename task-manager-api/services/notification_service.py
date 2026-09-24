@@ -1,48 +1,95 @@
+"""Email notifications.
+
+The SMTP credentials were fixed in the constructor, password included. They
+now come from configuration, and the transport is injectable — sending email
+no longer requires a real SMTP server to be tested (playbook RP-05).
+
+The class remains unused in the API flow, as in the original code. Wiring it
+into task assignment is a product decision, recorded under "Out of scope" in
+the audit report.
+"""
+import logging
 import smtplib
-from datetime import datetime
+from email.message import EmailMessage
+
+from config.settings import settings
+from models.user import agora
+
+logger = logging.getLogger(__name__)
+
+
+class SmtpTransport:
+    """Real transport. For tests, inject any other object exposing `send`."""
+
+    def __init__(self, host, port, user, password):
+        self.host = host
+        self.port = port
+        self.user = user
+        self.password = password
+
+    def send(self, mensagem):
+        with smtplib.SMTP(self.host, self.port) as servidor:
+            servidor.starttls()
+            if self.user:
+                servidor.login(self.user, self.password)
+            servidor.send_message(mensagem)
+
 
 class NotificationService:
-    def __init__(self):
+    def __init__(self, transport=None, remetente=None):
+        self.transport = transport or SmtpTransport(
+            settings.SMTP_HOST,
+            settings.SMTP_PORT,
+            settings.SMTP_USER,
+            settings.SMTP_PASSWORD,
+        )
+        self.remetente = remetente or settings.SMTP_USER
         self.notifications = []
-        self.email_host = 'smtp.gmail.com'
-        self.email_port = 587
-        self.email_user = 'taskmanager@gmail.com'
-        self.email_password = 'senha123'
 
     def send_email(self, to, subject, body):
-        try:
+        if not self.remetente:
+            logger.warning('notificacao.smtp_nao_configurado')
+            return False
 
-            server = smtplib.SMTP(self.email_host, self.email_port)
-            server.starttls()
-            server.login(self.email_user, self.email_password)
-            message = f"Subject: {subject}\n\n{body}"
-            server.sendmail(self.email_user, to, message)
-            server.quit()
-            print(f"Email enviado para {to}")
+        mensagem = EmailMessage()
+        mensagem['From'] = self.remetente
+        mensagem['To'] = to
+        mensagem['Subject'] = subject
+        mensagem.set_content(body)
+
+        try:
+            self.transport.send(mensagem)
+            logger.info('notificacao.enviada', extra={'assunto': subject})
             return True
-        except Exception as e:
-            print(f"Erro ao enviar email: {str(e)}")
+        except (smtplib.SMTPException, OSError):
+            logger.exception('notificacao.falha_envio')
             return False
 
     def notify_task_assigned(self, user, task):
-        subject = f"Nova task atribuída: {task.title}"
-        body = f"Olá {user.name},\n\nA task '{task.title}' foi atribuída a você.\n\nPrioridade: {task.priority}\nStatus: {task.status}"
-        self.send_email(user.email, subject, body)
+        assunto = f'Nova task atribuída: {task.title}'
+        corpo = (
+            f'Olá {user.name},\n\n'
+            f"A task '{task.title}' foi atribuída a você.\n\n"
+            f'Prioridade: {task.priority}\nStatus: {task.status}'
+        )
+        enviado = self.send_email(user.email, assunto, corpo)
+
         self.notifications.append({
             'type': 'task_assigned',
             'user_id': user.id,
             'task_id': task.id,
-            'timestamp': datetime.utcnow()
+            'timestamp': agora(),
         })
+        return enviado
 
     def notify_task_overdue(self, user, task):
-        subject = f"Task atrasada: {task.title}"
-        body = f"Olá {user.name},\n\nA task '{task.title}' está atrasada!\n\nData limite: {task.due_date}"
-        self.send_email(user.email, subject, body)
+        assunto = f'Task atrasada: {task.title}'
+        corpo = (
+            f'Olá {user.name},\n\n'
+            f"A task '{task.title}' está atrasada!\n\n"
+            f'Data limite: {task.due_date}'
+        )
+        return self.send_email(user.email, assunto, corpo)
 
     def get_notifications(self, user_id):
-        result = []
-        for n in self.notifications:
-            if n['user_id'] == user_id:
-                result.append(n)
-        return result
+        return [n for n in self.notifications if n['user_id'] == user_id]

@@ -1,6 +1,8 @@
 @baseUrl = http://localhost:3000
+# Same value set in ADMIN_TOKEN in .env
+@adminToken = token-de-teste
 
-### Checkout - sucesso
+### Checkout - success
 POST {{baseUrl}}/api/checkout
 Content-Type: application/json
 
@@ -12,7 +14,7 @@ Content-Type: application/json
   "card": "4111222233334444"
 }
 
-### Checkout - pagamento recusado
+### Checkout - payment declined
 POST {{baseUrl}}/api/checkout
 Content-Type: application/json
 
@@ -24,8 +26,17 @@ Content-Type: application/json
   "card": "5111222233334444"
 }
 
-### Relatório financeiro administrativo
+### Administrative financial report
+# Now requires a token: the endpoint exposed revenue and student data
+# to any anonymous request.
+GET {{baseUrl}}/api/admin/financial-report
+X-Admin-Token: {{adminToken}}
+
+### Financial report without a token (expected 401)
 GET {{baseUrl}}/api/admin/financial-report
 
-### Deletar usuário
+### Deactivate user
+# Deletion is now logical: removing the row left enrollments and
+# payments orphaned, corrupting the financial report.
 DELETE {{baseUrl}}/api/users/1
+X-Admin-Token: {{adminToken}}
